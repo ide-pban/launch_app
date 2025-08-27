@@ -1,0 +1,6 @@
+Item,Manufacturer,Part Number,Reference,Quantity,Description
+1,KOA,RK73B2ATTD1002F,R1;R5;R9;R10,4,10k Ohm Resistor 0603
+2,TDK,C1608X7R1H104K080AA,C1;C2;C3,3,0.1uF Capacitor 0603
+3,Microchip,ATmega328P-AU,U1,1,Microcontroller TQFP32
+4,Vishay,BAT54S,D1;D2,2,Schottky Diode SOT23
+5,Murata,GRM188R71H104KA93D,C10;C11,2,100nF Ceramic Capacitor
