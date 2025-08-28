@@ -156,7 +156,7 @@ class PartsListConverter:
         return part_numbers
     
     def extract_reference_designators(self, df: pd.DataFrame, part_idx: int) -> str:
-        """Extract reference designators (like R1, R5, C10) from the row"""
+        """Extract reference designators (like R1, R5, C10) from the row and format with commas"""
         row = df.iloc[part_idx]
         ref_patterns = [
             r'[RCLUDQJXYFT]\d+(?:[,;]\s*[RCLUDQJXYFT]\d+)*',  # R1,R5,C10 or R1;R5;C10 format
@@ -180,6 +180,12 @@ class PartsListConverter:
                     if ref_count > max_refs:
                         max_refs = ref_count
                         best_match = match
+        
+        # Format the references to always use commas as separators
+        if best_match:
+            # Extract individual references and join with commas
+            individual_refs = re.findall(r'[RCLUDQJXYFT]\d+', best_match, re.IGNORECASE)
+            return ','.join(individual_refs)
         
         return best_match
     
@@ -263,7 +269,7 @@ class PartsListConverter:
         
         return pd.DataFrame(template_data)
     
-    def create_output_file(self, mapped_data: pd.DataFrame, output_filename: str) -> str:
+    def create_output_file(self, mapped_data: pd.DataFrame, output_filename: str, panel_count: int = 8) -> str:
         """Create output file by copying template and replacing only data rows"""
         try:
             # Copy the original template to preserve exact formatting
@@ -284,6 +290,36 @@ class PartsListConverter:
                 st.error(f"Main sheet not found. Available: {workbook.sheetnames}")
                 return None
             
+            # Preserve formatting for merged cells in M1:M3 and O1:O3 before clearing data
+            m_cells_formatting = {}
+            o_cells_formatting = {}
+            try:
+                # Save formatting for M column merged cells (rows 1-3)
+                for row_num in [1, 2, 3]:
+                    cell = sheet.cell(row_num, 13)  # M column
+                    if cell.value or hasattr(cell, '_style'):
+                        m_cells_formatting[row_num] = {
+                            'font': cell.font,
+                            'fill': cell.fill,
+                            'border': cell.border,
+                            'alignment': cell.alignment,
+                            'number_format': cell.number_format
+                        }
+                
+                # Save formatting for O column merged cells (rows 1-3)
+                for row_num in [1, 2, 3]:
+                    cell = sheet.cell(row_num, 15)  # O column
+                    if cell.value or hasattr(cell, '_style'):
+                        o_cells_formatting[row_num] = {
+                            'font': cell.font,
+                            'fill': cell.fill,
+                            'border': cell.border,
+                            'alignment': cell.alignment,
+                            'number_format': cell.number_format
+                        }
+            except Exception as e:
+                print(f"Error saving formatting: {e}")
+            
             # Clear ONLY the data rows (7 and below) without touching formatting
             # This preserves all the template structure while clearing old data
             data_start_row = 7
@@ -300,41 +336,118 @@ class PartsListConverter:
                     except Exception:
                         continue
             
+            # Set panel count in M4
+            try:
+                sheet.cell(4, 13).value = panel_count  # M4: パネル枚数
+            except Exception as e:
+                print(f"Error setting panel count: {e}")
+            
+            # Restore preserved formatting for M column merged cells (rows 1-3)
+            try:
+                from openpyxl.styles import Font, Fill, Border, Alignment
+                for row_num, formatting in m_cells_formatting.items():
+                    cell = sheet.cell(row_num, 13)  # M column
+                    if formatting:
+                        cell.font = formatting['font']
+                        cell.fill = formatting['fill']
+                        cell.border = formatting['border']
+                        cell.alignment = formatting['alignment']
+                        cell.number_format = formatting['number_format']
+            except Exception as e:
+                print(f"Error restoring M column formatting: {e}")
+            
+            # Restore preserved formatting for O column merged cells (rows 1-3)
+            try:
+                for row_num, formatting in o_cells_formatting.items():
+                    cell = sheet.cell(row_num, 15)  # O column
+                    if formatting:
+                        cell.font = formatting['font']
+                        cell.fill = formatting['fill']
+                        cell.border = formatting['border']
+                        cell.alignment = formatting['alignment']
+                        cell.number_format = formatting['number_format']
+            except Exception as e:
+                print(f"Error restoring O column formatting: {e}")
+            
+            # Preserve P板.com text color formatting in O1, O2, O3
+            try:
+                # Get current formatting for P板.com cells and preserve it
+                for row_num in [1, 2, 3]:
+                    cell = sheet.cell(row_num, 15)  # O column
+                    if cell.value and 'P板.com' in str(cell.value):
+                        # Preserve existing font color by not modifying the cell
+                        pass
+            except Exception as e:
+                print(f"Error preserving P板.com formatting: {e}")
+            
+            # Preserve P column text color formatting in rows 1-4
+            try:
+                # Get current formatting for P column cells and preserve it
+                for row_num in [1, 2, 3, 4]:
+                    cell = sheet.cell(row_num, 16)  # P column
+                    if cell.value:
+                        # Preserve existing font color by not modifying the cell
+                        pass
+            except Exception as e:
+                print(f"Error preserving P column formatting: {e}")
+            
             # Insert new data starting from row 7
             for idx, row in mapped_data.iterrows():
                 current_row = data_start_row + idx
                 
                 try:
+                    # Check if cells are merged before setting values
+                    def set_cell_value_safe(row_num, col_num, value):
+                        try:
+                            cell = sheet.cell(row_num, col_num)
+                            # Skip merged cells (they are read-only)
+                            if hasattr(cell, '__class__') and 'MergedCell' in str(cell.__class__):
+                                return
+                            cell.value = value
+                        except Exception as e:
+                            print(f"Warning: Could not set cell {row_num},{col_num}: {e}")
+                    
                     # Set basic data - the template formatting will be preserved
-                    sheet.cell(current_row, 1).value = row.get('No', '')           # A: No
-                    sheet.cell(current_row, 2).value = row.get('メーカー', '')      # B: メーカー
-                    sheet.cell(current_row, 3).value = row.get('品名', '')         # C: 部品種別  
-                    sheet.cell(current_row, 4).value = row.get('電子部品型番', '')   # D: 電子部品型番
-                    sheet.cell(current_row, 5).value = row.get('配置記号', '')      # E: 配置記号
-                    sheet.cell(current_row, 6).value = row.get('個', '')           # F: 個数
-                    sheet.cell(current_row, 7).value = row.get('実装数', '')        # G: 1個あたり
+                    set_cell_value_safe(current_row, 1, row.get('No', ''))           # A: No
+                    set_cell_value_safe(current_row, 2, row.get('メーカー', ''))      # B: メーカー
+                    set_cell_value_safe(current_row, 3, row.get('品名', ''))         # C: 部品種別  
+                    set_cell_value_safe(current_row, 4, row.get('電子部品型番', ''))   # D: 電子部品型番
+                    set_cell_value_safe(current_row, 5, row.get('配置記号', ''))      # E: 配置記号
+                    
+                    # F: Set quantity based on comma-separated references in E column
+                    ref_string = row.get('配置記号', '')
+                    if ref_string:
+                        ref_count = len([r.strip() for r in ref_string.split(',') if r.strip()])
+                    else:
+                        ref_count = 0
+                    set_cell_value_safe(current_row, 6, ref_count)  # F: 個数
+                    set_cell_value_safe(current_row, 7, row.get('実装数', ''))        # G: 1個あたり
                     
                     # Column H: Total formula - use template's formula style
-                    h_cell = sheet.cell(current_row, 8)
-                    h_cell.value = f"=IF(F{current_row}=\"\",\"\",F{current_row}*G{current_row})"
+                    try:
+                        h_cell = sheet.cell(current_row, 8)
+                        if not (hasattr(h_cell, '__class__') and 'MergedCell' in str(h_cell.__class__)):
+                            h_cell.value = f"=IF(F{current_row}=\"\",\"\",F{current_row}*G{current_row})"
+                    except Exception:
+                        pass
                     
-                    sheet.cell(current_row, 9).value = row.get('実装/検査', '実装')   # I: 実装/未実装
+                    set_cell_value_safe(current_row, 9, row.get('実装/検査', '実装'))   # I: 実装/未実装
                     
                     # SMD/DIP/Special classification - clear all first, then set appropriate one
-                    sheet.cell(current_row, 10).value = None  # Clear SMD
-                    sheet.cell(current_row, 11).value = None  # Clear DIP  
-                    sheet.cell(current_row, 12).value = None  # Clear Special
+                    set_cell_value_safe(current_row, 10, None)  # Clear SMD
+                    set_cell_value_safe(current_row, 11, None)  # Clear DIP  
+                    set_cell_value_safe(current_row, 12, None)  # Clear Special
                     
                     part_type = row.get('部品型番', 'SMD')
                     if part_type == 'SMD':
-                        sheet.cell(current_row, 10).value = 'SMD'
+                        set_cell_value_safe(current_row, 10, 'SMD')
                     elif part_type == 'DIP':
-                        sheet.cell(current_row, 11).value = 'DIP'
+                        set_cell_value_safe(current_row, 11, 'DIP')
                     else:
-                        sheet.cell(current_row, 12).value = '特殊（BGA等）'
+                        set_cell_value_safe(current_row, 12, '特殊（BGA等）')
                     
                     # Column M: 必要数
-                    sheet.cell(current_row, 13).value = row.get('必要数', row.get('実装数', ''))
+                    set_cell_value_safe(current_row, 13, row.get('必要数', row.get('実装数', '')))
                     
                 except Exception as e:
                     print(f"Error setting data in row {current_row}: {e}")
@@ -437,7 +550,7 @@ def main():
                     output_filename = f"converted_{uploaded_file.name.split('.')[0]}.xlsx"
                     
                     with st.spinner("出力ファイルを作成中..."):
-                        output_path = converter.create_output_file(mapped_data, output_filename)
+                        output_path = converter.create_output_file(mapped_data, output_filename, panel_count)
                     
                     if output_path and os.path.exists(output_path):
                         st.success("✅ 変換完了！")
